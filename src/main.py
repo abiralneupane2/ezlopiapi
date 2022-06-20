@@ -7,6 +7,8 @@ import mysql.connector
 
 from SimpleWebSocketServer import SimpleWebSocketServer, WebSocket
 import python_jwt as jwt, jwcrypto.jwk as jwk, datetime
+from envparse import env
+
 
 PORT = 2000
 DB_HOST = "localhost"
@@ -17,6 +19,7 @@ KEY = jwk.JWK.generate(kty='RSA', size=2048)
 
 
 def register(data):
+    print("registering")
     c = db.cursor()
     dev_id = data["dev_id"]
     c.execute(f"INSERT INTO devices (dev_id) VALUES ({dev_id}) ON DUPLICATE KEY UPDATE dev_id={dev_id}")
@@ -27,6 +30,7 @@ def register(data):
     })
 
 def provision_update(data):
+    print("fetching data")
     c = db.cursor()
     dev_id = data["dev_id"]
     c.execute(f"SELECT * FROM DEVICES WHERE dev_id = {dev_id}")
@@ -59,10 +63,11 @@ class EzloSocket(WebSocket):
                 resp = provision_update(data)
             else:
                 raise Exception("Invalid cmd_id")
+            print("success")
             self.sendMessage(resp)
             
         except Exception as e:
-            print(e)
+            print("error", e)
             resp = json.dumps({
                 "id" : data["dev_id"] or None,
                 "resp_id": data["cmd_id"] or None,
