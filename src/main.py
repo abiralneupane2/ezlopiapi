@@ -12,12 +12,19 @@ import python_jwt as jwt, jwcrypto.jwk as jwk, datetime
 from envparse import env
 
 
+
 PORT = 2000
-DB_HOST = "localhost"
-DB_USER = "root"
-DB_PASSWORD = "root"
-DB_NAME = "ezlopi"
+
 KEY = jwk.JWK.generate(kty='RSA', size=2048)
+
+env.read_envfile()
+
+DB_HOST = env('MYSQL_HOST')
+DB_USER = "root"
+DB_PASSWORD = env('MYSQL_ROOT_PASSWORD')
+DB_NAME = "ezlopi"
+
+
 db = mysql.connector.connect(
             host=DB_HOST,
             user=DB_USER,
