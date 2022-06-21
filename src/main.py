@@ -1,19 +1,26 @@
 
+
 import json
 import asyncio
-from threading import Thread
-import copy
 import time
+import cgi
+from threading import Thread
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import urlparse, parse_qs
+
+
 
 import mysql.connector
-
 from SimpleWebSocketServer import SimpleWebSocketServer, WebSocket
 import python_jwt as jwt, jwcrypto.jwk as jwk, datetime
 from envparse import env
 
 
 
-PORT = 2000         #port for websocket server
+
+PORT = 2001         #port for websocket server
+HTTP_PORT = 2000    #port for http server
+HTTP_HOSTNAME = 'localhost'
 
 KEY = jwk.JWK.generate(kty='RSA', size=2048)    #private key for token generation
 
@@ -27,12 +34,20 @@ DB_PASSWORD = env('MYSQL_ROOT_PASSWORD')
 DB_NAME = "ezlopi"
 
 
+
+connected_devices_ids = []
+connected_devices_wsobjs = []
+
+
+
+
 db = mysql.connector.connect(
             host=DB_HOST,
             user=DB_USER,
             password=DB_PASSWORD,
             database=DB_NAME
         )
+
 
 
 def register(data):             #register method for cmd_id 7
@@ -46,6 +61,8 @@ def register(data):             #register method for cmd_id 7
         "id" : dev_id,
         "resp_id": data["cmd_id"]
     })
+
+
 
 def provision_update(data):             #provisoin update method for cmd_id 1
     print("fetching data")
@@ -68,6 +85,8 @@ def provision_update(data):             #provisoin update method for cmd_id 1
         "default_wifi_pass" : provision_data[2] or 'NDS_0ffice',
         "token" : token
     })
+
+
 
 def handleMessageCoroutine(wsobj, data):            #coroutine for concurrent serving of devices
     print("data: ", wsobj.data, type(wsobj.data))
@@ -94,6 +113,33 @@ def handleMessageCoroutine(wsobj, data):            #coroutine for concurrent se
 
 
 
+def handleMobileRequestCoroutine(httpobj, data):
+    print("handle coroutine")
+    print(data)
+    try:
+        dev_id = data["dev_id"]
+        wifi_ssid = data["default_wifi_ssid"]
+        wifi_password = data["default_wifi_pass"]
+        
+        c = db.cursor()
+        sql = f"UPDATE devices SET wifi_ssid = '{wifi_ssid}', wifi_password = '{wifi_password}' WHERE dev_id = '{dev_id}'"
+        c.execute(sql)
+        db.commit()
+        try:
+            idx = connected_devices_ids.index(dev_id)
+            connected_devices_wsobjs[idx].sendMessage(json.dumps(data))
+        except Exception as e:
+            print(str(e))
+            # print(f"device of id {dev_id} is not currently online")
+            
+        httpobj.send_response(200)
+    except Exception as e:
+        print(str(e))
+        httpobj.send_response(400)
+    
+    
+
+
 
 class EzloSocket(WebSocket):
 
@@ -101,22 +147,65 @@ class EzloSocket(WebSocket):
         Thread(target=handleMessageCoroutine, args=(self, json.loads(self.data))).start()       #thread to handle message begins here
     
     def handleConnected(self):
-        print(self.address, 'connected')
+        
+        
+        try:
+            headers = str(self.request.headers)
+            headers_list = headers.split('\n')
+            for h in reversed(headers_list):
+                temp = dev_id = h.split(':')
+                if temp[0] == "dev_id":
+                    dev_id = temp[1].lstrip()
+                    connected_devices_ids.append(dev_id)
+                    connected_devices_wsobjs.append(self)
+                    break
+
+            
+            
+
+        except Exception as e:
+            print(str(e))
+        
+        
+        print("connected: ", self.address)
+        print("connected devices: ", connected_devices_ids)
+        
 
     def handleClose(self):
-        print(self.address, 'closed')
+        try:
+            idx = connected_devices_wsobjs.index(self)
+            del connected_devices_wsobjs[idx]
+            del connected_devices_ids[idx]
+
+        except Exception as e:
+            print(e)
+        print("Disconnected:", self.address)
+        print("connected devices: ", connected_devices_ids)
+        
+
+
+class EzloHTTP(BaseHTTPRequestHandler):
+    def do_POST(self):
+        content_len = int(self.headers.get('Content-Length'))
+        post_body = self.rfile.read(content_len)
+        data = json.loads(post_body.decode('utf-8'))
+        print("post data", data)
+        handleMobileRequestCoroutine(self, data)
+        
 
 
 
 
-
-
-async def main():
+def main():
     server = SimpleWebSocketServer('0.0.0.0', PORT, EzloSocket)
-    await asyncio.create_task(server.serveforever())
+    Thread(target=server.serveforever).start()
+    print("WS server started at port %s" % (PORT))
+    webServer = HTTPServer((HTTP_HOSTNAME, HTTP_PORT), EzloHTTP)
+    Thread(target=webServer.serve_forever).start()
+    print("HTTP server started http://%s:%s" % (HTTP_HOSTNAME, HTTP_PORT))
 
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
 
